@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cricket Batting Order Wheel</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 0; background: #f5f5f7; color: #111; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 18px; display: grid; gap: 16px; }
+    .card { background: white; border-radius: 14px; padding: 16px; box-shadow: 0 6px 24px rgba(0,0,0,.08); }
+    .grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 16px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    p { margin: 8px 0; line-height: 1.35; color: #333; }
+    textarea {
+      width: 100%; min-height: 160px; resize: vertical;
+      border: 1px solid #ddd; border-radius: 12px; padding: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 14px;
+    }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    button {
+      border: 0; border-radius: 12px; padding: 10px 14px; cursor: pointer;
+      background: #1f6feb; color: white; font-weight: 600;
+    }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .secondary { background: #2dba4e; }
+    .ghost { background: #e9e9ee; color: #222; }
+    .small { font-size: 12px; color: #555; }
+
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brandTitle { font-weight: 800; letter-spacing: .4px; }
+    .logo {
+      width: 44px; height: 44px; border-radius: 12px; overflow: hidden;
+      display: grid; place-items: center;
+      background: linear-gradient(135deg, #111, #444);
+      color: #fff;
+      font-weight: 900;
+      font-size: 12px;
+      text-align: center;
+      line-height: 1.05;
+      padding: 6px;
+      box-shadow: 0 6px 18px rgba(0,0,0,.12);
+    }
+    .logo img { width: 100%; height: 100%; object-fit: cover; display: none; }
+
+    .wheelWrap { display: grid; place-items: center; padding: 8px; position: relative; }
+    canvas#wheel { width: min(520px, 92vw); height: min(520px, 92vw); }
+    .pointer {
+      width: 0; height: 0;
+      border-left: 14px solid transparent;
+      border-right: 14px solid transparent;
+      border-bottom: 28px solid #111;
+      transform: translateY(6px);
+      z-index: 2;
+    }
+
+    ol { margin: 10px 0 0 18px; }
+    li { margin: 6px 0; }
+    .pill { display: inline-block; padding: 4px 10px; border-radius: 999px; background: #f0f7ff; color: #0b3d91; font-weight: 600; }
+    .status { min-height: 20px; }
+
+    /* Confetti overlay canvas */
+    #confetti {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 3;
+      width: min(520px, 92vw);
+      height: min(520px, 92vw);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="topbar">
+        <div class="brand">
+          <div class="logo" id="logoBox" title="STC Pumas">
+            <img id="logoImg" alt="STC Pumas logo" />
+            <div id="logoFallback">STC<br/>PUMAS</div>
+          </div>
+          <div>
+            <div class="brandTitle">STC Pumas</div>
+            <div class="small">Batting Order – Spin the Wheel (all players, no repeats)</div>
+          </div>
+        </div>
+        <div class="pill" id="spinCounter">Ready</div>
+      </div>
+
+      <p class="small">
+        Click <b>Randomise & Spin All</b>. The wheel will animate each pick and build the full batting order.
+      </p>
+      <p class="small">
+        To show your real logo: place a file named <b>stc-pumas-logo.png</b> next to this HTML file.
+      </p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="row" style="justify-content: space-between;">
+          <div class="status" id="status"></div>
+        </div>
+
+        <div class="wheelWrap">
+          <div class="pointer" aria-hidden="true"></div>
+          <canvas id="wheel" width="700" height="700"></canvas>
+          <canvas id="confetti" width="700" height="700"></canvas>
+        </div>
+
+        <div class="row">
+          <button id="spinAll">Randomise & Spin All</button>
+          <button id="spin1" class="secondary">Spin 1x</button>
+          <button id="reset" class="ghost">Reset</button>
+        </div>
+
+        <p class="small">
+          Tip: the order is truly random (Fisher–Yates shuffle). Each run picks every name exactly once.
+        </p>
+      </div>
+
+      <div class="card">
+        <h1>Names</h1>
+        <textarea id="names">Keebs
+Shubby
+Buzz
+Jono
+Mitch
+Eddie
+Mathews
+Vince</textarea>
+
+        <h1 style="margin-top:14px;">Batting Order</h1>
+        <ol id="results"></ol>
+
+        <p class="small" id="note"></p>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ---------- Utilities ----------
+  function parseNames(text) {
+    return text
+      .split(/\r?\n/)
+      .map(s => s.trim())
+      .filter(Boolean);
+  }
+
+  function fisherYatesShuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+  // ---------- Logo loader (optional) ----------
+  // Put stc-pumas-logo.png next to this HTML file to show it.
+const logoImg = document.getElementById('logoImg');
+const logoFallback = document.getElementById('logoFallback');
+
+// Use the Pumas logo you provided:
+logoImg.src = "https://res.cloudinary.com/playhq/image/upload/h_128,w_128/v1/production/ca/f1e1d029-171a-495b-a496-e143bc3439ce/1661346088910/logo.png?_a=BAMAMifg0";
+logoImg.onload = () => {
+  logoImg.style.display = "block";
+  logoFallback.style.display = "none";
+};
+logoImg.onerror = () => {
+  console.warn("Logo failed to load — showing fallback badge");
+};
+
+  // ---------- Wheel drawing ----------
+  const canvas = document.getElementById('wheel');
+  const ctx = canvas.getContext('2d');
+
+  const confettiCanvas = document.getElementById('confetti');
+  const cctx = confettiCanvas.getContext('2d');
+
+  const spinCounter = document.getElementById('spinCounter');
+  const statusEl = document.getElementById('status');
+  const resultsOl = document.getElementById('results');
+  const noteEl = document.getElementById('note');
+
+  const namesTa = document.getElementById('names');
+  const btnSpinAll = document.getElementById('spinAll');
+  const btnSpin1 = document.getElementById('spin1');
+  const btnReset = document.getElementById('reset');
+
+  let names = parseNames(namesTa.value);
+  let rotation = 0; // radians
+  let spinning = false;
+
+  // Bag contains the full run order (all names once)
+  let bag = [];
+  let pickIndex = 0;
+  let picked = [];
+
+  // Colors: generated by HSL wheel for nice spread
+  function segmentColor(i, n) {
+    const hue = (i / n) * 360;
+    return `hsl(${hue} 75% 60%)`;
+  }
+
+  function drawWheel(highlightName = null) {
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const cx = w / 2, cy = h / 2;
+    const r = Math.min(w, h) * 0.42;
+    const n = names.length || 1;
+    const arc = (Math.PI * 2) / n;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+
+    // subtle shadow ring
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 18, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    ctx.fill();
+
+    for (let i = 0; i < n; i++) {
+      const start = rotation + i * arc;
+      const end = start + arc;
+      const label = names[i];
+      const isHighlight = highlightName && label === highlightName;
+
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, r, start, end);
+      ctx.closePath();
+
+      ctx.fillStyle = segmentColor(i, n);
+      ctx.fill();
+
+      if (isHighlight) {
+        ctx.lineWidth = 10;
+        ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+        ctx.stroke();
+      } else {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(255,255,255,0.65)';
+        ctx.stroke();
+      }
+
+      // label
+      ctx.save();
+      ctx.rotate(start + arc / 2);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = 'rgba(0,0,0,0.9)';
+      ctx.font = 'bold 26px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+      ctx.translate(r - 18, 10);
+      ctx.rotate(Math.PI / 2);
+      ctx.fillText(label, 0, 0);
+      ctx.restore();
+    }
+
+    // center button look
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.18, 0, Math.PI * 2);
+    ctx.fillStyle = '#111';
+    ctx.fill();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 26px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Spin', 0, 2);
+
+    ctx.restore();
+
+    // Outer border
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+    ctx.stroke();
+
+    // Pointer guide line (top)
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.beginPath();
+    ctx.moveTo(0, -r - 2);
+    ctx.lineTo(0, -r + 18);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function rotationToLandOnName(targetName) {
+    const n = names.length;
+    const arc = (Math.PI * 2) / n;
+    const idx = names.indexOf(targetName);
+    if (idx < 0) return rotation;
+
+    // Segment center angle should align to pointer (-PI/2)
+    const pointerAngle = -Math.PI / 2;
+    return pointerAngle - (idx + 0.5) * arc;
+  }
+
+  async function animateSpinTo(targetName) {
+    spinning = true;
+    setButtonsEnabled(false);
+
+    const baseTarget = rotationToLandOnName(targetName);
+
+    // Add extra full rotations for drama (random 4-7 turns)
+    const extraTurns = 4 + Math.floor(Math.random() * 4);
+    const targetRotation = baseTarget + extraTurns * Math.PI * 2;
+
+    const start = rotation;
+    const delta = targetRotation - start;
+    const duration = 1600 + Math.floor(Math.random() * 900);
+    const t0 = performance.now();
+
+    return new Promise(resolve => {
+      function frame(now) {
+        const t = Math.min(1, (now - t0) / duration);
+        rotation = start + delta * easeOutCubic(t);
+        drawWheel();
+
+        if (t < 1) {
+          requestAnimationFrame(frame);
+        } else {
+          rotation = baseTarget;
+          rotation = (rotation % (Math.PI * 2) + (Math.PI * 2)) % (Math.PI * 2);
+          spinning = false;
+          drawWheel(targetName);
+          setButtonsEnabled(true);
+          resolve();
+        }
+      }
+      requestAnimationFrame(frame);
+    });
+  }
+
+  function setButtonsEnabled(enabled) {
+    btnSpinAll.disabled = !enabled;
+    btnSpin1.disabled = !enabled;
+    btnReset.disabled = !enabled;
+    namesTa.disabled = !enabled;
+  }
+
+  function refreshNames() {
+    names = parseNames(namesTa.value);
+    drawWheel();
+    noteEl.textContent = names.length < 2
+      ? "Add at least 2 names."
+      : "";
+  }
+
+  function resetRun() {
+    picked = [];
+    bag = [];
+    pickIndex = 0;
+    resultsOl.innerHTML = "";
+    statusEl.textContent = "";
+    spinCounter.textContent = "Ready";
+    refreshNames();
+    stopConfetti();
+    clearConfetti();
+  }
+
+  function appendResult(name) {
+    picked.push(name);
+    const li = document.createElement('li');
+    li.textContent = name;
+    resultsOl.appendChild(li);
+  }
+
+  function setStatus(msg) {
+    statusEl.textContent = msg;
+  }
+
+  function setCounter() {
+    const total = Math.max(1, names.length);
+    spinCounter.textContent = picked.length
+      ? `Picked ${picked.length}/${total}`
+      : "Ready";
+  }
+
+  function ensureRunReady() {
+    refreshNames();
+    if (names.length < 1) {
+      alert("Please enter at least 1 name.");
+      return false;
+    }
+    if (bag.length === 0 || pickIndex >= bag.length) {
+      bag = fisherYatesShuffle(names);
+      pickIndex = 0;
+    }
+    return true;
+  }
+
+  async function spinOnce() {
+    if (spinning) return;
+    if (!ensureRunReady()) return;
+
+    // pick next unique from bag (bag contains all names once)
+    const next = bag[pickIndex++];
+    setStatus(`Spinning for pick ${picked.length + 1}...`);
+    setCounter();
+
+    await animateSpinTo(next);
+
+    setStatus(`Selected: ${next}`);
+    appendResult(next);
+    setCounter();
+
+    // Final?
+    if (picked.length >= names.length) {
+      setStatus("Final batting order locked ✅");
+      burstConfetti();
+    }
+  }
+
+  async function spinAll() {
+    resetRun();
+    if (!ensureRunReady()) return;
+
+    // One shuffle defines the entire batting order:
+    bag = fisherYatesShuffle(names);
+    pickIndex = 0;
+
+    for (let i = 0; i < names.length; i++) {
+      await spinOnce();
+      await new Promise(r => setTimeout(r, 350));
+    }
+  }
+
+  // ---------- Confetti (canvas overlay) ----------
+  let confettiParticles = [];
+  let confettiRaf = null;
+  let confettiUntil = 0;
+
+  function clearConfetti() {
+    cctx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
+  }
+
+  function resizeConfettiToMatchWheel() {
+    // Keep internal resolution aligned with wheel canvas
+    confettiCanvas.width = canvas.width;
+    confettiCanvas.height = canvas.height;
+  }
+
+  function spawnConfetti(count = 160) {
+    resizeConfettiToMatchWheel();
+    const w = confettiCanvas.width;
+    const h = confettiCanvas.height;
+
+    const centerX = w / 2;
+    const centerY = h / 2;
+
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 3 + Math.random() * 8;
+
+      confettiParticles.push({
+        x: centerX + (Math.random() * 20 - 10),
+        y: centerY + (Math.random() * 20 - 10),
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 2,
+        g: 0.12 + Math.random() * 0.08,
+        r: 4 + Math.random() * 6,
+        rot: Math.random() * Math.PI,
+        vr: (Math.random() - 0.5) * 0.25,
+        life: 120 + Math.floor(Math.random() * 80),
+        hue: Math.floor(Math.random() * 360),
+      });
+    }
+  }
+
+  function drawConfettiFrame() {
+    const w = confettiCanvas.width;
+    const h = confettiCanvas.height;
+
+    cctx.clearRect(0, 0, w, h);
+
+    confettiParticles = confettiParticles.filter(p => p.life > 0);
+
+    for (const p of confettiParticles) {
+      p.vy += p.g;
+      p.x += p.vx;
+      p.y += p.vy;
+      p.rot += p.vr;
+      p.life--;
+
+      // slight drag
+      p.vx *= 0.99;
+      p.vy *= 0.99;
+
+      cctx.save();
+      cctx.translate(p.x, p.y);
+      cctx.rotate(p.rot);
+      cctx.fillStyle = `hsl(${p.hue} 85% 60%)`;
+      cctx.fillRect(-p.r, -p.r * 0.6, p.r * 2, p.r * 1.2);
+      cctx.restore();
+    }
+
+    const now = performance.now();
+    const stillRunning = confettiParticles.length > 0 || now < confettiUntil;
+
+    if (stillRunning) {
+      confettiRaf = requestAnimationFrame(drawConfettiFrame);
+    } else {
+      stopConfetti();
+      clearConfetti();
+    }
+  }
+
+  function burstConfetti() {
+    stopConfetti();
+    confettiParticles = [];
+    spawnConfetti(220);
+    confettiUntil = performance.now() + 1200; // keep a little extra time
+    confettiRaf = requestAnimationFrame(drawConfettiFrame);
+  }
+
+  function stopConfetti() {
+    if (confettiRaf) cancelAnimationFrame(confettiRaf);
+    confettiRaf = null;
+    confettiUntil = 0;
+  }
+
+  // ---------- Events ----------
+  namesTa.addEventListener('input', () => {
+    if (!spinning) refreshNames();
+  });
+
+  btnReset.addEventListener('click', resetRun);
+  btnSpin1.addEventListener('click', spinOnce);
+  btnSpinAll.addEventListener('click', spinAll);
+
+  // Initial draw
+  resetRun();
+})();
+</script>
+</body>
+</html>
